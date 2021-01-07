@@ -30,7 +30,7 @@ import {RemotePlayer} from "../Entity/RemotePlayer";
 import {Queue} from 'queue-typescript';
 import {SimplePeer, UserSimplePeerInterface} from "../../WebRtc/SimplePeer";
 import {ReconnectingSceneName} from "../Reconnecting/ReconnectingScene";
-import {loadAllLayers, loadObject, loadPlayerCharacters} from "../Entity/body_character";
+import {lazyLoadPlayerCharacterTextures} from "../Entity/PlayerTexturesLoadingManager";
 import {
     CenterListener,
     layoutManager,
@@ -66,7 +66,7 @@ import {ChatModeIcon} from "../Components/ChatModeIcon";
 import {OpenChatIcon, openChatIconName} from "../Components/OpenChatIcon";
 import {SelectCharacterScene, SelectCharacterSceneName} from "../Login/SelectCharacterScene";
 import {TextureError} from "../../Exception/TextureError";
-import {TextField} from "../Components/TextField";
+import {addLoader} from "../Components/Loader";
 
 export interface GameSceneInitInterface {
     initPosition: PointInterface|null,
@@ -181,7 +181,7 @@ export class GameScene extends ResizableScene implements CenterListener {
 
     //hook preload scene
     preload(): void {
-        this.initProgressBar();
+        addLoader(this);
 
         this.load.image(openChatIconName, 'resources/objects/talk.png');
         this.load.on(FILE_LOAD_ERROR, (file: {src: string}) => {
@@ -201,26 +201,8 @@ export class GameScene extends ResizableScene implements CenterListener {
             this.onMapLoad(data);
         }
 
-        //add player png
-        loadPlayerCharacters(this.load);
-        loadAllLayers(this.load);
-        loadObject(this.load);
-
+        this.load.spritesheet('layout_modes', 'resources/objects/layout_modes.png', {frameWidth: 32, frameHeight: 32});
         this.load.bitmapFont('main_font', 'resources/fonts/arcade.png', 'resources/fonts/arcade.xml');
-    }
-
-    private initProgressBar(): void {
-        const loadingText = this.add.text(this.game.renderer.width / 2, 200, 'Loading');
-        const progress = this.add.graphics();
-        this.load.on('progress', (value: number) => {
-            progress.clear();
-            progress.fillStyle(0xffffff, 1);
-            progress.fillRect(0, 270, 800 * value, 60);
-        });
-        this.load.on('complete', () => {
-            loadingText.destroy();
-            progress.destroy();
-        });
     }
 
     // FIXME: we need to put a "unknown" instead of a "any" and validate the structure of the JSON we are receiving.
@@ -340,11 +322,7 @@ export class GameScene extends ResizableScene implements CenterListener {
             throw 'playerName is not set';
         }
         this.playerName = playerName;
-        const characterLayers = gameManager.getCharacterLayers();
-        if (!characterLayers) {
-            throw 'characterLayers are not set';
-        }
-        this.characterLayers = characterLayers;
+        this.characterLayers = gameManager.getCharacterLayers();
 
 
         //initalise map
@@ -877,15 +855,15 @@ export class GameScene extends ResizableScene implements CenterListener {
     }
 
     createCurrentPlayer(){
-        //initialise player
         //TODO create animation moving between exit and start
+        const texturesPromise = lazyLoadPlayerCharacterTextures(this.load, this.textures, this.characterLayers);
         try {
             this.CurrentPlayer = new Player(
                 this,
                 this.startX,
                 this.startY,
                 this.playerName,
-                this.characterLayers,
+                texturesPromise,
                 PlayerAnimationNames.WalkDown,
                 false,
                 this.userInputManager
@@ -1061,11 +1039,8 @@ export class GameScene extends ResizableScene implements CenterListener {
             event: addPlayerData
         });
     }
-
-    /**
-     * Create new player
-     */
-    private async doAddPlayer(addPlayerData : AddPlayerInterface) : Promise<void> {
+    
+    private doAddPlayer(addPlayerData : AddPlayerInterface): void {
         //check if exist player, if exist, move position
         if(this.MapPlayersByKey.has(addPlayerData.userId)){
             this.updatePlayerPosition({
@@ -1075,7 +1050,8 @@ export class GameScene extends ResizableScene implements CenterListener {
             return;
         }
         // Load textures (in case it is a custom texture)
-        const characterLayerList: string[] = [];
+        //todo: custom texture into lazyLoadPlayerCharacterTextures
+        /*const characterLayerList: string[] = [];
         const loadPromises: Promise<void>[] = [];
         for (const characterLayer of addPlayerData.characterLayers) {
             characterLayerList.push(characterLayer.name);
@@ -1086,27 +1062,22 @@ export class GameScene extends ResizableScene implements CenterListener {
         }
         if (loadPromises.length > 0) {
             this.load.start();
-        }
+        }*/
 
-        //initialise player
+        const texturesPromise = lazyLoadPlayerCharacterTextures(this.load, this.textures, addPlayerData.characterLayers.map(c => c.name));
         const player = new RemotePlayer(
             addPlayerData.userId,
             this,
             addPlayerData.position.x,
             addPlayerData.position.y,
             addPlayerData.name,
-            [], // Let's go with no textures and let's load textures when promises have returned.
+            texturesPromise,
             addPlayerData.position.direction,
             addPlayerData.position.moving
         );
         this.MapPlayers.add(player);
         this.MapPlayersByKey.set(player.userId, player);
         player.updatePosition(addPlayerData.position);
-
-
-        await Promise.all(loadPromises);
-
-        player.addTextures(characterLayerList, 1);
     }
 
     /**
